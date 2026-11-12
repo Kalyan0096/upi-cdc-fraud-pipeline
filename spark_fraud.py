@@ -1,6 +1,6 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (from_json, col, to_timestamp, lit,
-                                   when, coalesce, concat_ws)
+                                   when, coalesce, concat_ws, current_timestamp)
 from pyspark.sql.types import *
 
 spark = (SparkSession.builder
@@ -75,10 +75,15 @@ def process_batch(batch_df, batch_id):
             when(col("r_device"), lit("NEW_DEVICE")))))
 
     flagged = b.where(col("reasons") != "")
-    if not flagged.isEmpty():
-        print(f"\n*** FRAUD ALERT (batch {batch_id}) ***")
-        flagged.select("txn_id", "user_id", "device_id", "amount",
-                       "txn_last_min", "reasons").show(truncate=False)
+    if flagged.isEmpty():
+        return
+    out = flagged.select("txn_id", "user_id", "device_id", "amount",
+                         "merchant", "city", "reasons")
+    print(f"\n*** FRAUD ALERT (batch {batch_id}) ***")
+    out.show(truncate=False)
+    (out.withColumn("detected_at", current_timestamp())
+        .write.jdbc(JDBC_URL, "fraud_alerts", mode="append", properties=PROPS))
+    out.write.mode("append").parquet("data/fraud_alerts")
 
 (txns.writeStream
     .foreachBatch(process_batch)
